@@ -10,10 +10,9 @@ if (!defined('APP_VERSION')) {
 
 /**
  * Event: plugin.install
- * - Create core np_rpa table if it does not exist
- * - Create module settings table
- * - Ensure RealPhone route exists
- * - Backup core realphone-related files into plugin storage
+ * - Create all required tables
+ * - Migrate legacy farm_api_url setting to first farm node
+ * - Hydrate core files from plugin storage snapshot
  */
 function install($Plugin)
 {
@@ -21,8 +20,8 @@ function install($Plugin)
         return false;
     }
 
-    // Create np_rpa table (id, username, serverurl, deviceid, follow, story_view, story_like, start_time, end_time, account_problems, data, sync_time, data_send)
-    $sql = "
+    // Core RPA data table
+    $sql_rpa = "
         CREATE TABLE IF NOT EXISTS `".TABLE_PREFIX."rpa` (
             `id` int(11) NOT NULL AUTO_INCREMENT,
             `username` varchar(255) NOT NULL,
@@ -41,7 +40,6 @@ function install($Plugin)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
 
-    // Mirror table name np_rpa (without prefix) for backwards compatibility with existing RpaModel usage.
     $sql_np = "
         CREATE TABLE IF NOT EXISTS `np_rpa` (
             `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -61,7 +59,7 @@ function install($Plugin)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
 
-    // Settings table for module (simple key/value)
+    // Settings key/value store (legacy + screen_base_url)
     $sql_settings = "
         CREATE TABLE IF NOT EXISTS `".TABLE_PREFIX."rpa_manager_settings` (
             `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -74,37 +72,135 @@ function install($Plugin)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
 
-    // Local record of device assignments per SaaS user (for future unassign logic/UI)
-    $sql_assigned = "
-        CREATE TABLE IF NOT EXISTS `".TABLE_PREFIX."rpa_assigned_devices` (
+    // User-owned farm connections (each SaaS user can add their own farm)
+    $sql_user_farms = "
+        CREATE TABLE IF NOT EXISTS `".TABLE_PREFIX."rpa_user_farms` (
             `id` int(11) NOT NULL AUTO_INCREMENT,
             `user_id` int(11) NOT NULL,
-            `device_id` varchar(255) NOT NULL,
-            `device_name` varchar(255) DEFAULT NULL,
+            `name` varchar(191) NOT NULL,
+            `url` varchar(512) NOT NULL,
+            `screen_url` varchar(512) DEFAULT NULL,
+            `is_active` tinyint(1) NOT NULL DEFAULT 1,
             `created_at` datetime NOT NULL,
+            `updated_at` datetime NOT NULL,
             PRIMARY KEY (`id`),
-            UNIQUE KEY `uk_device` (`device_id`),
             KEY `idx_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    ";
+
+    // Farm nodes: each entry is an independent phone farm API
+    $sql_nodes = "
+        CREATE TABLE IF NOT EXISTS `".TABLE_PREFIX."rpa_farm_nodes` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `name` varchar(191) NOT NULL,
+            `url` varchar(512) NOT NULL,
+            `screen_url` varchar(512) DEFAULT NULL,
+            `is_active` tinyint(1) NOT NULL DEFAULT 1,
+            `created_at` datetime NOT NULL,
+            `updated_at` datetime NOT NULL,
+            PRIMARY KEY (`id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ";
 
     try {
         $pdo = \DB::pdo();
-        foreach ([$sql, $sql_np, $sql_settings, $sql_assigned] as $q) {
+
+        foreach ([$sql_rpa, $sql_np, $sql_settings, $sql_user_farms, $sql_nodes] as $q) {
             $stmt = $pdo->prepare($q);
             $stmt->execute();
             $stmt->closeCursor();
         }
+
+        // Migration: add farm_node_id to np_rpa tables so each row knows which farm node it belongs to.
+        // np_rpa already has serverurl; farm_node_id is a convenient FK to np_rpa_farm_nodes.
+        foreach ([TABLE_PREFIX . "rpa", "np_rpa"] as $tbl) {
+            try {
+                $check = $pdo->prepare("SHOW COLUMNS FROM `{$tbl}` LIKE 'farm_node_id'");
+                $check->execute();
+                if ($check->rowCount() === 0) {
+                    $pdo->exec("ALTER TABLE `{$tbl}` ADD COLUMN `farm_node_id` int(11) DEFAULT NULL");
+                }
+                $check->closeCursor();
+            } catch (\Exception $e) {
+                // Table may not exist yet or alter failed — non-fatal
+            }
+        }
+
+        // Migration: add screen_url to np_rpa_farm_nodes if it doesn't exist yet
+        try {
+            $check = $pdo->prepare("SHOW COLUMNS FROM `".TABLE_PREFIX."rpa_farm_nodes` LIKE 'screen_url'");
+            $check->execute();
+            if ($check->rowCount() === 0) {
+                $pdo->exec("ALTER TABLE `".TABLE_PREFIX."rpa_farm_nodes` ADD COLUMN `screen_url` varchar(512) DEFAULT NULL AFTER `url`");
+            }
+            $check->closeCursor();
+        } catch (\Exception $e) {}
+
+        // Back-fill farm_node_id in np_rpa rows by matching serverurl against farm node URLs
+        $rpaTable   = TABLE_PREFIX . "rpa";
+        $nodesTable = TABLE_PREFIX . "rpa_farm_nodes";
+        try {
+            $nodeRows = $pdo->query("SELECT `id`, `url` FROM `{$nodesTable}`")->fetchAll(\PDO::FETCH_ASSOC);
+            foreach ($nodeRows as $nodeRow) {
+                if (empty($nodeRow['url'])) continue;
+                $upd = $pdo->prepare(
+                    "UPDATE `{$rpaTable}` SET `farm_node_id` = ? WHERE `serverurl` = ? AND `farm_node_id` IS NULL"
+                );
+                $upd->execute([(int)$nodeRow['id'], trim($nodeRow['url'])]);
+                $upd->closeCursor();
+            }
+        } catch (\Exception $e) {
+            // Non-fatal backfill
+        }
+
+        // Migration: if old farm_api_url setting exists but no farm nodes yet, create first node
+        $nodesTable    = TABLE_PREFIX . "rpa_farm_nodes";
+        $settingsTable = TABLE_PREFIX . "rpa_manager_settings";
+
+        $countStmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM `{$nodesTable}`");
+        $countStmt->execute();
+        $countRow = $countStmt->fetch(\PDO::FETCH_ASSOC);
+        $countStmt->closeCursor();
+
+        if (isset($countRow['cnt']) && (int)$countRow['cnt'] === 0) {
+            $urlStmt = $pdo->prepare("SELECT `value` FROM `{$settingsTable}` WHERE `name` = 'farm_api_url' LIMIT 1");
+            $urlStmt->execute();
+            $urlRow = $urlStmt->fetch(\PDO::FETCH_ASSOC);
+            $urlStmt->closeCursor();
+
+            if (!empty($urlRow['value'])) {
+                $now = date('Y-m-d H:i:s');
+                $ins = $pdo->prepare(
+                    "INSERT INTO `{$nodesTable}` (`name`, `url`, `is_active`, `created_at`, `updated_at`) VALUES (?, ?, 1, ?, ?)"
+                );
+                $ins->execute(["Primary Farm", trim($urlRow['value']), $now, $now]);
+                $ins->closeCursor();
+
+                // Also migrate farm_api_url_2 if set
+                $url2Stmt = $pdo->prepare("SELECT `value` FROM `{$settingsTable}` WHERE `name` = 'farm_api_url_2' LIMIT 1");
+                $url2Stmt->execute();
+                $url2Row = $url2Stmt->fetch(\PDO::FETCH_ASSOC);
+                $url2Stmt->closeCursor();
+
+                if (!empty($url2Row['value'])) {
+                    $ins2 = $pdo->prepare(
+                        "INSERT INTO `{$nodesTable}` (`name`, `url`, `is_active`, `created_at`, `updated_at`) VALUES (?, ?, 1, ?, ?)"
+                    );
+                    $ins2->execute(["Secondary Farm", trim($url2Row['value']), $now, $now]);
+                    $ins2->closeCursor();
+                }
+            }
+        }
+
     } catch (\PDOException $e) {}
 
-    // On install, hydrate core files FROM the plugin's storage snapshot
-    // into the main app, so new installations get the bundled versions.
+    // Hydrate core files from plugin storage snapshot
     $storageBase = PLUGINS_PATH . "/" . IDNAME . "/storage";
     $map = [
-        $storageBase . "/models/RpaModel.php"                 => APPPATH . "/models/RpaModel.php",
-        $storageBase . "/models/RpasModel.php"                => APPPATH . "/models/RpasModel.php",
-        $storageBase . "/controllers/RealPhoneController.php" => APPPATH . "/controllers/RealPhoneController.php",
-        $storageBase . "/views/realphone.php"                 => APPPATH . "/views/realphone.php",
+        $storageBase . "/models/RpaModel.php"                    => APPPATH . "/models/RpaModel.php",
+        $storageBase . "/models/RpasModel.php"                   => APPPATH . "/models/RpasModel.php",
+        $storageBase . "/controllers/RealPhoneController.php"    => APPPATH . "/controllers/RealPhoneController.php",
+        $storageBase . "/views/realphone.php"                    => APPPATH . "/views/realphone.php",
         $storageBase . "/views/fragments/realphone.fragment.php" => APPPATH . "/views/fragments/realphone.fragment.php",
     ];
 
@@ -116,8 +212,6 @@ function install($Plugin)
         if (!is_dir($dstDir)) {
             @mkdir($dstDir, 0755, true);
         }
-        // Always overwrite app copies with the module's storage snapshot,
-        // even if destination files already exist.
         @copy($src, $dst);
     }
 }
@@ -125,7 +219,7 @@ function install($Plugin)
 
 /**
  * Event: plugin.remove
- * We intentionally keep tables and backups to avoid data loss.
+ * Tables and backups are intentionally kept to avoid data loss.
  */
 function uninstall($Plugin)
 {
@@ -142,19 +236,31 @@ function route_maps($global_variable_name)
 {
     $router = $GLOBALS[$global_variable_name];
 
-    // Admin settings UI for RPA Manager
+    // Admin settings UI
     $router->map("GET|POST", "/e/".IDNAME."/settings/?", [
         PLUGINS_PATH . "/". IDNAME ."/controllers/SettingsController.php",
         __NAMESPACE__ . "\SettingsController"
     ]);
 
-    // Admin devices management AJAX endpoint
+    // Farm nodes CRUD AJAX
+    $router->map("GET|POST", "/e/".IDNAME."/farm-nodes-api/?", [
+        PLUGINS_PATH . "/". IDNAME ."/controllers/FarmNodesController.php",
+        __NAMESPACE__ . "\FarmNodesController"
+    ]);
+
+    // User farm connections AJAX (any logged-in user)
+    $router->map("GET|POST", "/e/".IDNAME."/user-farms-api/?", [
+        PLUGINS_PATH . "/". IDNAME ."/controllers/UserFarmsController.php",
+        __NAMESPACE__ . "\UserFarmsController"
+    ]);
+
+    // Device management AJAX
     $router->map("GET|POST", "/e/".IDNAME."/devices-api/?", [
         PLUGINS_PATH . "/". IDNAME ."/controllers/AdminDevicesController.php",
         __NAMESPACE__ . "\AdminDevicesController"
     ]);
 
-    // Ensure /realphone route exists and points to core RealPhoneController
+    // Core RealPhone route
     $router->map("GET|POST", "/realphone/?", [
         APPPATH . "/controllers/RealPhoneController.php",
         "RealPhoneController"
@@ -176,7 +282,7 @@ function navigation_admin($Nav, $AuthUser)
 \Event::bind("navigation.add_special_menu", __NAMESPACE__ . '\navigation_admin');
 
 /**
- * Add Real Phone Manager entry for non-admin users, redirecting to /realphone.
+ * Add Real Phone Manager entry for non-admin users.
  */
 function navigation_realphone($Nav, $AuthUser)
 {
@@ -186,11 +292,9 @@ function navigation_realphone($Nav, $AuthUser)
 
     $is_admin = method_exists($AuthUser, 'isAdmin') && $AuthUser->isAdmin();
     if ($is_admin) {
-        // Admins use the full module navigation instead.
         return;
     }
 
-    // Only show if module is enabled for the user's package.
     $user_modules = $AuthUser->get("settings.modules") ?: [];
     if (!in_array($idname, (array)$user_modules)) {
         return;
@@ -201,7 +305,7 @@ function navigation_realphone($Nav, $AuthUser)
 \Event::bind("navigation.add_special_menu", __NAMESPACE__ . '\navigation_realphone');
 
 /**
- * Add module to package options so admins can enable it per plan.
+ * Add module to package options.
  */
 function add_module_option($package_modules)
 {
@@ -220,4 +324,3 @@ function add_module_option($package_modules)
     <?php
 }
 \Event::bind("package.add_module_option", __NAMESPACE__ . '\add_module_option');
-
