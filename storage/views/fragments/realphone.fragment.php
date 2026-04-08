@@ -55,6 +55,101 @@
     <?php endif; ?>
 </div>
 
+<!-- ── My Farm Connections ─────────────────────────────────────────────── -->
+<div class="bg-white rounded-lg shadow-md mb-6" id="user-farms-section">
+    <div class="flex items-center justify-between px-5 py-4 cursor-pointer" id="user-farms-header">
+        <h3 class="text-base font-semibold text-gray-800 flex items-center gap-2">
+            <svg class="w-5 h-5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>
+            </svg>
+            <?= __("My Farm Connections") ?>
+            <span id="user-farms-count" class="ml-1 text-xs font-medium bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
+                <?= count($AllUserFarms ?? []) ?>
+            </span>
+        </h3>
+        <div class="flex items-center gap-3">
+            <button type="button" id="btn-connect-farm"
+                    class="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all duration-200">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                </svg>
+                <?= __("Connect Farm") ?>
+            </button>
+            <svg id="user-farms-chevron" class="w-5 h-5 text-gray-400 transition-transform duration-200" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+        </div>
+    </div>
+
+    <div id="user-farms-body" class="border-t border-gray-100 px-5 py-4">
+        <!-- Setup info banner -->
+        <div class="flex items-start gap-3 p-3 mb-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+            <svg class="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+                <?= __("Connect your own phone farm by entering its API URL and screen URL below.") ?>
+                <?= __("Don't have a farm set up yet?") ?>
+                <a href="https://github.com/kanibaspinar/phone-automation"
+                   target="_blank" rel="noopener noreferrer"
+                   class="inline-flex items-center gap-1 font-medium text-blue-700 hover:text-blue-900 hover:underline ml-1">
+                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                        <path fill-rule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.009-.868-.013-1.703-2.782.604-3.369-1.341-3.369-1.341-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.115 2.504.337 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z" clip-rule="evenodd"/>
+                    </svg>
+                    <?= __("Phone Automation Setup Guide") ?>
+                </a>
+            </div>
+        </div>
+
+        <!-- Farm list rendered by JS -->
+        <div id="user-farms-list"></div>
+
+        <!-- Add / Edit form -->
+        <div id="user-farm-form" style="display:none;"
+             class="mt-4 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
+            <h4 class="text-sm font-semibold text-gray-700 mb-3" id="user-farm-form-title"><?= __("Connect New Farm") ?></h4>
+            <input type="hidden" id="uf-edit-id" value="">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1"><?= __("Farm Name") ?></label>
+                    <input type="text" id="uf-name"
+                           placeholder="<?= __("e.g. My Personal Farm") ?>"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1"><?= __("Farm API URL") ?></label>
+                    <input type="url" id="uf-url"
+                           placeholder="https://your-farm.example.com"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-gray-600 mb-1">
+                        <?= __("Screen URL") ?>
+                        <span class="text-gray-400 font-normal">(<?= __("optional") ?>)</span>
+                    </label>
+                    <input type="url" id="uf-screen-url"
+                           placeholder="https://screens.example.com"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                </div>
+            </div>
+            <div id="uf-form-error" class="text-xs text-red-600 mb-2" style="display:none;"></div>
+            <div class="flex gap-2 justify-end">
+                <button type="button" id="btn-uf-cancel"
+                        class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none transition-all">
+                    <?= __("Cancel") ?>
+                </button>
+                <button type="button" id="btn-uf-save"
+                        class="inline-flex items-center gap-1 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all">
+                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    <?= __("Save") ?>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="grid gap-6">
     <?php if (!empty($Devices)): ?>
         <?php foreach($Devices as $device): ?>
@@ -72,20 +167,16 @@
                                     <?= __("Add Account") ?>
                                 </button>
                             <?php endif; ?>
+                            <?php if (!empty($device->screen_url)): ?>
                             <button class="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transform transition-all duration-200 js-view-screen"
-                                    data-device-id="<?= $device->device_id ?>" >
+                                    data-device-id="<?= htmlchars($device->device_id) ?>"
+                                    data-screen-url="<?= htmlchars($device->screen_url) ?>">
                                 <svg class="w-4 h-4 mr-1.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                                 </svg>
-                                <?= __("View Screen F1") ?>
+                                <?= __("View Screen") ?>
                             </button>
-							<button class="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transform transition-all duration-200 js-view-screen2"
-                                    data-device-id="<?= $device->device_id ?>" >
-                                <svg class="w-4 h-4 mr-1.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                                </svg>
-                                <?= __("View Screen F2") ?>
-                            </button>
+                            <?php endif; ?>
                         </div>
                         <div class="flex items-center text-gray-500 text-sm">
                             <svg class="w-5 h-5 text-gray-400 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
