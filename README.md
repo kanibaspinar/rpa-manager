@@ -121,5 +121,5 @@ rpa-manager/
 - Direct file access is blocked: files check for `APP_VERSION` constant.
 
 ## License
-
+Do you need coaching for how to run automation and monetize it? Contact : [Kani Baspinar](https://t.me/kanibaspinar)
 Proprietary — © [Kani Baspinar](https://hypervoter.com)
