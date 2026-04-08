@@ -29,12 +29,6 @@
             $TopBar->btn = false;
             require_once(APPPATH.'/views/fragments/topbar.fragment.php'); 
         ?>
-     <script>
-    const farmNumber = <?= json_encode($FarmNumber) ?>;
-    // Screen base URLs from RPA Manager settings (injected by controller before rendering this view)
-    window.RPA_SCREEN_BASE_URL = <?= isset($ScreenBaseUrl) ? json_encode($ScreenBaseUrl) : 'null' ?>;
-    window.RPA_SCREEN_BASE_URL_2 = <?= isset($ScreenBaseUrl2) ? json_encode($ScreenBaseUrl2) : 'null' ?>;
-</script>
 
         <!-- Toast Notification Container -->
         <div id="toast-container" class="fixed top-4 right-4 z-50"></div>
@@ -58,6 +52,10 @@
         <script type="text/javascript" src="<?= APPURL."/assets/js/plugins.js?v=".VERSION ?>"></script>
         <?php require_once(APPPATH.'/inc/js-locale.inc.php'); ?>
         <script type="text/javascript" src="<?= APPURL."/assets/js/core.js?v=".VERSION ?>"></script>
+        <script type="text/javascript">
+            window.RPA_USER_FARMS     = <?= json_encode(array_values($AllUserFarms ?? []), JSON_UNESCAPED_UNICODE) ?>;
+            window.RPA_USER_FARMS_API = '<?= APPURL ?>/e/rpa-manager/user-farms-api/';
+        </script>
         <script type="text/javascript">
             function showAlert(message, type = 'error') {
                 const toast = document.createElement('div');
@@ -235,40 +233,17 @@
                     });
                 });
 
-               // View screen functionality (Screen base URL comes from RPA Manager settings)
-$(".js-view-screen2").on("click", function () {
-    const deviceId = $(this).data("deviceId");
-    const iframe = $("#screen-iframe");
-
-    const baseUrl = (window.RPA_SCREEN_BASE_URL_2 || window.RPA_SCREEN_BASE_URL || "").replace(/\/+$/, "");
-    if (!baseUrl) {
-        showAlert("<?= __('Screen base URL is not configured. Please ask admin to set it in RPA Manager settings.') ?>", 'error');
-        return;
-    }
-    iframe.attr("src", baseUrl + "/device/" + deviceId);
-
-    $("#screen-modal").addClass("is-active");
-});
-
-                // Close screen modal
-                $(".screen-modal__close, #screen-modal").on("click", function(e) {
-                    if (e.target === this) {
-                        $("#screen-modal").removeClass("is-active");
-                        $("#screen-iframe").attr("src", "");
-                    }
-                });
-               // View screen functionality
+               // View screen — URL is stored per-device from its farm node's screen_url
 $(".js-view-screen").on("click", function () {
-    const deviceId = $(this).data("deviceId");
-    const iframe = $("#screen-iframe");
+    const deviceId  = $(this).data("deviceId");
+    const screenUrl = ($(this).data("screenUrl") || "").replace(/\/+$/, "");
+    const iframe    = $("#screen-iframe");
 
-    const baseUrl = (window.RPA_SCREEN_BASE_URL || "").replace(/\/+$/, "");
-    if (!baseUrl) {
-        showAlert("<?= __('Screen base URL is not configured. Please ask admin to set it in RPA Manager settings.') ?>", 'error');
+    if (!screenUrl) {
+        showAlert("<?= __('Screen URL is not configured for this farm node. Please set it in RPA Manager \u2192 Farm Nodes.') ?>", 'error');
         return;
     }
-    iframe.attr("src", baseUrl + "/device/" + deviceId);
-
+    iframe.attr("src", screenUrl + "/device/" + deviceId);
     $("#screen-modal").addClass("is-active");
 });
 
@@ -288,6 +263,229 @@ $(".js-view-screen").on("click", function () {
                         $('input[name="account"]').prop('checked', false);
                         $("#confirm-assignment").prop('disabled', true);
                     }
+                });
+
+                // ── User Farm Connections ─────────────────────────────────
+                var userFarms = window.RPA_USER_FARMS || [];
+
+                function renderUserFarms(farms) {
+                    var $list = $("#user-farms-list");
+                    $("#user-farms-count").text(farms.length);
+
+                    if (!farms.length) {
+                        $list.html('<p class="text-sm text-gray-400 py-2"><?= __("No farm connections yet. Click \"Connect Farm\" to add one.") ?></p>');
+                        return;
+                    }
+
+                    var rows = farms.map(function(f) {
+                        var statusBadge = f.is_active
+                            ? '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700"><?= __("Active") ?></span>'
+                            : '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500"><?= __("Inactive") ?></span>';
+
+                        var screenCell = f.screen_url
+                            ? '<a href="' + $('<span/>').text(f.screen_url).html() + '" target="_blank" class="text-xs text-indigo-600 hover:underline truncate max-w-xs inline-block">' + $('<span/>').text(f.screen_url).html() + '</a>'
+                            : '<span class="text-xs text-gray-400">—</span>';
+
+                        var toggleLabel = f.is_active ? '<?= __("Deactivate") ?>' : '<?= __("Activate") ?>';
+
+                        return '<tr class="border-b border-gray-100 last:border-0 hover:bg-gray-50">'
+                            + '<td class="py-2 pr-4 text-sm font-medium text-gray-800">' + $('<span/>').text(f.name).html() + '</td>'
+                            + '<td class="py-2 pr-4 text-xs text-gray-500 truncate max-w-xs">' + $('<span/>').text(f.url).html() + '</td>'
+                            + '<td class="py-2 pr-4">' + screenCell + '</td>'
+                            + '<td class="py-2 pr-4">' + statusBadge + '</td>'
+                            + '<td class="py-2 whitespace-nowrap">'
+                            +   '<button class="js-uf-edit text-xs text-blue-600 hover:underline mr-3" data-id="' + f.id + '" data-name="' + $('<span/>').text(f.name).html() + '" data-url="' + $('<span/>').text(f.url).html() + '" data-screen-url="' + $('<span/>').text(f.screen_url || '').html() + '"><?= __("Edit") ?></button>'
+                            +   '<button class="js-uf-toggle text-xs text-gray-500 hover:underline mr-3" data-id="' + f.id + '" data-active="' + f.is_active + '">' + toggleLabel + '</button>'
+                            +   '<button class="js-uf-delete text-xs text-red-600 hover:underline" data-id="' + f.id + '" data-name="' + $('<span/>').text(f.name).html() + '"><?= __("Delete") ?></button>'
+                            + '</td>'
+                            + '</tr>';
+                    }).join('');
+
+                    $list.html('<table class="w-full">'
+                        + '<thead><tr class="text-left text-xs font-medium text-gray-500 border-b border-gray-200">'
+                        + '<th class="pb-2 pr-4"><?= __("Name") ?></th>'
+                        + '<th class="pb-2 pr-4"><?= __("Farm API URL") ?></th>'
+                        + '<th class="pb-2 pr-4"><?= __("Screen URL") ?></th>'
+                        + '<th class="pb-2 pr-4"><?= __("Status") ?></th>'
+                        + '<th class="pb-2"><?= __("Actions") ?></th>'
+                        + '</tr></thead>'
+                        + '<tbody>' + rows + '</tbody>'
+                        + '</table>');
+                }
+
+                function resetUfForm() {
+                    $("#uf-edit-id").val("");
+                    $("#uf-name").val("");
+                    $("#uf-url").val("");
+                    $("#uf-screen-url").val("");
+                    $("#uf-form-error").hide().text("");
+                    $("#user-farm-form-title").text("<?= __("Connect New Farm") ?>");
+                    $("#user-farm-form").hide();
+                }
+
+                // Initial render
+                renderUserFarms(userFarms);
+
+                // Toggle collapse/expand
+                $("#user-farms-header").on("click", function(e) {
+                    if ($(e.target).closest("#btn-connect-farm").length) return;
+                    var $body = $("#user-farms-body");
+                    var $chevron = $("#user-farms-chevron");
+                    if ($body.is(":visible")) {
+                        $body.slideUp(200);
+                        $chevron.css("transform", "rotate(-90deg)");
+                    } else {
+                        $body.slideDown(200);
+                        $chevron.css("transform", "rotate(0deg)");
+                    }
+                });
+
+                // Show add form
+                $("#btn-connect-farm").on("click", function(e) {
+                    e.stopPropagation();
+                    resetUfForm();
+                    $("#user-farms-body").slideDown(200);
+                    $("#user-farms-chevron").css("transform", "rotate(0deg)");
+                    $("#user-farm-form").slideDown(200);
+                    $("#uf-name").focus();
+                });
+
+                // Cancel form
+                $("#btn-uf-cancel").on("click", function() {
+                    resetUfForm();
+                });
+
+                // Edit button
+                $(document).on("click", ".js-uf-edit", function() {
+                    var $btn = $(this);
+                    $("#uf-edit-id").val($btn.data("id"));
+                    $("#uf-name").val($btn.data("name"));
+                    $("#uf-url").val($btn.data("url"));
+                    $("#uf-screen-url").val($btn.data("screenUrl") || "");
+                    $("#uf-form-error").hide().text("");
+                    $("#user-farm-form-title").text("<?= __("Edit Farm Connection") ?>");
+                    $("#user-farms-body").slideDown(200);
+                    $("#user-farms-chevron").css("transform", "rotate(0deg)");
+                    $("#user-farm-form").slideDown(200);
+                    $("#uf-name").focus();
+                });
+
+                // Save (create or update)
+                $("#btn-uf-save").on("click", function() {
+                    var editId   = $("#uf-edit-id").val();
+                    var name     = $.trim($("#uf-name").val());
+                    var url      = $.trim($("#uf-url").val());
+                    var screenUrl= $.trim($("#uf-screen-url").val());
+
+                    if (!name || !url) {
+                        $("#uf-form-error").text("<?= __("Name and Farm API URL are required.") ?>").show();
+                        return;
+                    }
+
+                    var $btn = $(this);
+                    $btn.prop("disabled", true).addClass("opacity-50");
+
+                    var payload = { name: name, url: url, screen_url: screenUrl };
+                    if (editId) {
+                        payload.action = "update";
+                        payload.id     = editId;
+                    } else {
+                        payload.action = "create";
+                    }
+
+                    $.ajax({
+                        url: window.RPA_USER_FARMS_API,
+                        type: "POST",
+                        contentType: "application/json",
+                        dataType: "json",
+                        data: JSON.stringify(payload),
+                        success: function(resp) {
+                            if (resp.success) {
+                                if (editId) {
+                                    userFarms = userFarms.map(function(f) {
+                                        return f.id == editId ? resp.farm : f;
+                                    });
+                                } else {
+                                    userFarms.push(resp.farm);
+                                }
+                                renderUserFarms(userFarms);
+                                resetUfForm();
+                                showAlert(resp.message || "<?= __("Saved.") ?>", "success");
+                            } else {
+                                $("#uf-form-error").text(resp.message || "<?= __("An error occurred.") ?>").show();
+                            }
+                        },
+                        error: function() {
+                            $("#uf-form-error").text("<?= __("An error occurred. Please try again.") ?>").show();
+                        },
+                        complete: function() {
+                            $btn.prop("disabled", false).removeClass("opacity-50");
+                        }
+                    });
+                });
+
+                // Delete button
+                $(document).on("click", ".js-uf-delete", function() {
+                    var id   = $(this).data("id");
+                    var name = $(this).data("name");
+                    if (!confirm("<?= __("Delete farm connection") ?> \"" + name + "\"?")) return;
+
+                    $.ajax({
+                        url: window.RPA_USER_FARMS_API,
+                        type: "POST",
+                        contentType: "application/json",
+                        dataType: "json",
+                        data: JSON.stringify({ action: "delete", id: id }),
+                        success: function(resp) {
+                            if (resp.success) {
+                                userFarms = userFarms.filter(function(f) { return f.id != id; });
+                                renderUserFarms(userFarms);
+                                showAlert(resp.message || "<?= __("Deleted.") ?>", "success");
+                            } else {
+                                showAlert(resp.message || "<?= __("An error occurred.") ?>", "error");
+                            }
+                        },
+                        error: function() {
+                            showAlert("<?= __("An error occurred. Please try again.") ?>", "error");
+                        }
+                    });
+                });
+
+                // Toggle active/inactive
+                $(document).on("click", ".js-uf-toggle", function() {
+                    var $btn     = $(this);
+                    var id       = $btn.data("id");
+                    var isActive = parseInt($btn.data("active")) ? 0 : 1;
+                    var farm     = userFarms.find(function(f) { return f.id == id; });
+                    if (!farm) return;
+
+                    $.ajax({
+                        url: window.RPA_USER_FARMS_API,
+                        type: "POST",
+                        contentType: "application/json",
+                        dataType: "json",
+                        data: JSON.stringify({
+                            action: "update",
+                            id: id,
+                            name: farm.name,
+                            url: farm.url,
+                            screen_url: farm.screen_url || "",
+                            is_active: isActive
+                        }),
+                        success: function(resp) {
+                            if (resp.success) {
+                                userFarms = userFarms.map(function(f) {
+                                    return f.id == id ? resp.farm : f;
+                                });
+                                renderUserFarms(userFarms);
+                            } else {
+                                showAlert(resp.message || "<?= __("An error occurred.") ?>", "error");
+                            }
+                        },
+                        error: function() {
+                            showAlert("<?= __("An error occurred. Please try again.") ?>", "error");
+                        }
+                    });
                 });
             });
         </script>
