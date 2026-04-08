@@ -7,12 +7,14 @@ if (!defined('APP_VERSION')) {
 }
 
 /**
- * Admin settings for RPA Manager (farm API URL and related options)
+ * Admin settings page for RPA Manager.
+ * Handles screen_base_url form; farm node CRUD is done via FarmNodesController AJAX.
  */
 class SettingsController extends \Controller
 {
-    const IDNAME = 'rpa-manager';
+    const IDNAME        = 'rpa-manager';
     const TABLE_SETTINGS = 'rpa_manager_settings';
+    const TABLE_NODES   = 'rpa_farm_nodes';
 
     public function process()
     {
@@ -24,28 +26,26 @@ class SettingsController extends \Controller
 
         $settings = $this->getSettings();
         $users    = $this->getUsersForAdmin();
+        $nodes    = $this->getFarmNodes();
 
         if (isset($_SERVER['REQUEST_METHOD']) && strtoupper($_SERVER['REQUEST_METHOD']) === 'POST') {
-            $farmUrl    = trim(\Input::post("farm_api_url"));
-            $farmUrl2   = trim(\Input::post("farm_api_url_2"));
-            $screenBase = trim(\Input::post("screen_base_url"));
+            $screenBase = trim((string)\Input::post("screen_base_url"));
 
-            $this->saveSettings([
-                'farm_api_url'    => $farmUrl,
-                'farm_api_url_2'  => $farmUrl2,
-                'screen_base_url' => $screenBase,
-            ]);
+            $this->saveSetting('screen_base_url', $screenBase);
 
             $settings = $this->getSettings();
             $this->setVariable("success", __("Settings saved successfully."));
         }
 
-        $this->setVariable("Settings", $settings);
-        $this->setVariable("Users", $users);
-        $this->setVariable("AuthUser", $AuthUser);
-        $this->setVariable("idname", self::IDNAME);
+        $this->setVariable("Settings",  $settings);
+        $this->setVariable("Users",     $users);
+        $this->setVariable("FarmNodes", $nodes);
+        $this->setVariable("AuthUser",  $AuthUser);
+        $this->setVariable("idname",    self::IDNAME);
         $this->view(PLUGINS_PATH . "/" . self::IDNAME . "/views/settings.php", "default");
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
 
     protected function getSettings()
     {
@@ -56,8 +56,8 @@ class SettingsController extends \Controller
             return [];
         }
         $out = [];
-        foreach ($rows as $row) {
-            $name = is_array($row) ? ($row["name"] ?? null) : ($row->name ?? null);
+        foreach ((array)$rows as $row) {
+            $name  = is_array($row) ? ($row["name"] ?? null) : ($row->name ?? null);
             $value = is_array($row) ? ($row["value"] ?? null) : ($row->value ?? null);
             if ($name !== null) {
                 $out[$name] = $value;
@@ -66,40 +66,55 @@ class SettingsController extends \Controller
         return $out;
     }
 
-    protected function saveSettings(array $data)
+    protected function saveSetting(string $name, $value)
     {
         $table = TABLE_PREFIX . self::TABLE_SETTINGS;
-        $now = date('Y-m-d H:i:s');
-        foreach ($data as $name => $value) {
-            try {
-                $exists = \DB::table($table)
-                    ->where("name", "=", $name)
-                    ->select(["id"])
-                    ->get();
-                if (!empty($exists)) {
-                    \DB::table($table)
-                        ->where("name", "=", $name)
-                        ->update([
-                            "value" => $value,
-                            "updated_at" => $now,
-                        ]);
-                } else {
-                    \DB::table($table)->insert([
-                        "name" => $name,
-                        "value" => $value,
-                        "created_at" => $now,
-                        "updated_at" => $now,
-                    ]);
-                }
-            } catch (\Exception $e) {
-                // ignore single-setting failures
+        $now   = date('Y-m-d H:i:s');
+        try {
+            $exists = \DB::table($table)->where("name", "=", $name)->select(["id"])->get();
+            if (!empty($exists)) {
+                \DB::table($table)->where("name", "=", $name)->update([
+                    "value"      => $value,
+                    "updated_at" => $now,
+                ]);
+            } else {
+                \DB::table($table)->insert([
+                    "name"       => $name,
+                    "value"      => $value,
+                    "created_at" => $now,
+                    "updated_at" => $now,
+                ]);
             }
+        } catch (\Exception $e) {
+            // Non-fatal
         }
     }
 
-    /**
-     * Load a lightweight list of users for the admin device manager UI.
-     */
+    protected function getFarmNodes()
+    {
+        $table = TABLE_PREFIX . self::TABLE_NODES;
+        try {
+            $rows = \DB::table($table)
+                ->select(["id", "name", "url", "screen_url", "is_active", "created_at"])
+                ->orderBy("id", "ASC")
+                ->get();
+        } catch (\Exception $e) {
+            return [];
+        }
+
+        $out = [];
+        foreach ((array)$rows as $row) {
+            $out[] = [
+                "id"         => (int)(is_array($row) ? ($row["id"] ?? 0) : ($row->id ?? 0)),
+                "name"       => (string)(is_array($row) ? ($row["name"] ?? "") : ($row->name ?? "")),
+                "url"        => (string)(is_array($row) ? ($row["url"] ?? "") : ($row->url ?? "")),
+                "screen_url" => (string)(is_array($row) ? ($row["screen_url"] ?? "") : ($row->screen_url ?? "")),
+                "is_active"  => (int)(is_array($row) ? ($row["is_active"] ?? 1) : ($row->is_active ?? 1)),
+            ];
+        }
+        return $out;
+    }
+
     protected function getUsersForAdmin()
     {
         $table = TABLE_PREFIX . "users";
@@ -113,14 +128,12 @@ class SettingsController extends \Controller
         }
 
         $out = [];
-        foreach ($rows as $row) {
+        foreach ((array)$rows as $row) {
             $id = is_array($row) ? ($row["id"] ?? null) : ($row->id ?? null);
-            if ($id === null) {
-                continue;
-            }
+            if ($id === null) continue;
+
             $User = \Controller::model("User", (int)$id);
             if (!$User->isAvailable() || (method_exists($User, "isExpired") && $User->isExpired())) {
-                // Skip expired or unavailable users
                 continue;
             }
             $out[] = [
@@ -132,4 +145,3 @@ class SettingsController extends \Controller
         return $out;
     }
 }
-
